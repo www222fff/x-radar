@@ -1,0 +1,8 @@
+.venv/
+accounts.db
+accounts.db-*
+account.txt
+codes*.json
+codes*.json.tmp
+*.log
+__pycache__/

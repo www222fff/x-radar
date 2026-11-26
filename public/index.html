@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>X Radar</title>
+<style>
+  :root {
+    --bg: #f1f5f9;
+    --header: #1e293b;
+    --header-sub: #94a3b8;
+    --card: #ffffff;
+    --border: #e2e8f0;
+    --text: #0f172a;
+    --muted: #64748b;
+    --accent: #2563eb;
+    --accent-hover: #1d4ed8;
+    --accent-soft: #eff6ff;
+    --danger: #dc2626;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: Inter, -apple-system, system-ui, "Segoe UI", Roboto, sans-serif;
+         background: var(--bg); color: var(--text); }
+  header { background: var(--header); color: #f8fafc; padding: 20px 24px; position: sticky; top: 0;
+           z-index: 1; box-shadow: 0 1px 3px rgba(15, 23, 42, 0.25); }
+  .head-inner { max-width: 960px; margin: 0 auto; }
+  h1 { margin: 0 0 6px; font-size: 19px; font-weight: 600; letter-spacing: 0.2px; }
+  .meta { font-size: 13px; color: var(--header-sub); display: flex; flex-wrap: wrap; gap: 6px 14px; }
+  .meta b { color: #e2e8f0; font-weight: 600; }
+  .wrap { padding: 20px 24px 40px; max-width: 960px; margin: 0 auto; }
+  .count { font-size: 13px; color: var(--muted); margin-bottom: 12px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 14px; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 16px;
+          box-shadow: 0 1px 2px rgba(15, 23, 42, 0.05); transition: box-shadow 0.15s, border-color 0.15s; }
+  .card:hover { border-color: #cbd5e1; box-shadow: 0 4px 12px rgba(15, 23, 42, 0.08); }
+  .card.newest { border-left: 4px solid var(--accent); }
+  .row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .code { font-size: 26px; font-weight: 700; letter-spacing: 3px; color: var(--header);
+          font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+  .sub { font-size: 12px; color: var(--muted); margin-top: 10px; word-break: break-all; line-height: 1.6; }
+  a { color: var(--accent); text-decoration: none; font-weight: 500; }
+  a:hover { text-decoration: underline; }
+  button { background: var(--accent); color: #fff; border: 0; border-radius: 6px; padding: 6px 12px;
+           cursor: pointer; font-size: 12px; font-weight: 500; transition: background 0.15s; }
+  button:hover { background: var(--accent-hover); }
+  button.copied { background: #0f766e; }
+  .empty { color: var(--muted); padding: 48px 0; text-align: center; background: var(--card);
+           border: 1px dashed #cbd5e1; border-radius: 10px; }
+  .err { color: #fca5a5; }
+  .badge { display: inline-block; font-size: 11px; font-weight: 600; color: var(--accent);
+           background: var(--accent-soft); border-radius: 999px; padding: 2px 8px; margin-left: 6px;
+           vertical-align: middle; letter-spacing: 0; }
+</style>
+</head>
+<body>
+<header>
+  <div class="head-inner">
+    <h1 id="title">X Radar</h1>
+    <div class="meta">
+      <span><span id="subtitle">Matches posted on X</span> in the last <b id="win">24 hours</b>, newest first</span>
+      <span id="status">Loading…</span>
+      <span>Next X check in <b id="countdown">--</b></span>
+    </div>
+  </div>
+</header>
+<div class="wrap">
+  <div id="count" class="count"></div>
+  <div id="list" class="grid"></div>
+  <div id="empty" class="empty" hidden>Nothing found in this time window yet.</div>
+</div>
+<script>
+let refreshMs = 30000;
+let nextPollAt = Date.now() + refreshMs;
+let nextRunAt = null;
+
+function esc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  }[c]));
+}
+
+function safeUrl(u) {
+  return /^https:\/\/(x|twitter)\.com\//.test(u || '') ? u : '';
+}
+
+function fmtAgo(iso) {
+  const s = Math.max(0, Math.floor((Date.now() - Date.parse(iso)) / 1000));
+  if (s < 60) return s + 's ago';
+  const m = Math.floor(s / 60);
+  if (m < 60) return m + ' min ago';
+  const h = Math.floor(m / 60);
+  return h + 'h ' + (m % 60) + 'm ago';
+}
+
+function fmtWindow(min) {
+  if (min >= 60 && min % 60 === 0) {
+    const h = min / 60;
+    return h + (h === 1 ? ' hour' : ' hours');
+  }
+  return min + ' minutes';
+}
+
+async function load() {
+  try {
+    const r = await fetch('/api/codes', { cache: 'no-store' });
+    const d = await r.json();
+    if (d.title) {
+      document.title = d.title;
+      document.getElementById('title').textContent = d.title;
+    }
+    if (d.subtitle) document.getElementById('subtitle').textContent = d.subtitle;
+    document.getElementById('win').textContent = fmtWindow(d.windowMinutes);
+    refreshMs = Math.max(10000, (d.pageRefreshSeconds || 30) * 1000);
+    nextRunAt = d.nextRun ? Date.parse(d.nextRun) : null;
+    const statusEl = document.getElementById('status');
+    if (d.lastError) {
+      statusEl.innerHTML = '<span class="err">Scrape error: ' + esc(d.lastError) + '</span>';
+    } else {
+      statusEl.textContent = 'Last updated ' + (d.lastRun ? fmtAgo(d.lastRun) : 'never');
+    }
+    const list = document.getElementById('list');
+    const empty = document.getElementById('empty');
+    const count = document.getElementById('count');
+    list.innerHTML = '';
+    if (!d.codes.length) {
+      empty.hidden = false;
+      count.textContent = '';
+    } else {
+      empty.hidden = true;
+      count.textContent = d.codes.length + (d.codes.length === 1 ? ' result' : ' results');
+      d.codes.forEach((c, i) => {
+        const url = safeUrl(c.url);
+        const el = document.createElement('div');
+        el.className = 'card' + (i === 0 ? ' newest' : '');
+        el.innerHTML =
+          '<div class="row"><span class="code">' + esc(c.code) +
+          (i === 0 ? '<span class="badge">NEWEST</span>' : '') + '</span>' +
+          '<button data-code="' + esc(c.code) + '">Copy</button></div>' +
+          '<div class="sub">' + (c.author ? esc(c.author) + ' · ' : '') + fmtAgo(c.tweetTime || c.firstSeen) +
+          (url ? ' · <a target="_blank" rel="noopener noreferrer" href="' + esc(url) + '">View post</a>' : '') +
+          '</div>';
+        list.appendChild(el);
+      });
+      list.querySelectorAll('button[data-code]').forEach((b) => {
+        b.onclick = () => {
+          navigator.clipboard.writeText(b.dataset.code);
+          b.textContent = 'Copied';
+          b.classList.add('copied');
+          setTimeout(() => { b.textContent = 'Copy'; b.classList.remove('copied'); }, 1200);
+        };
+      });
+    }
+  } catch (e) {
+    document.getElementById('status').innerHTML = '<span class="err">Cannot reach backend</span>';
+  }
+  nextPollAt = Date.now() + refreshMs;
+}
+
+function fmtLeft(sec) {
+  if (sec < 60) return sec + 's';
+  return Math.floor(sec / 60) + 'm ' + (sec % 60) + 's';
+}
+
+setInterval(() => {
+  const cd = document.getElementById('countdown');
+  if (nextRunAt) {
+    const left = Math.round((nextRunAt - Date.now()) / 1000);
+    cd.textContent = left > 0 ? fmtLeft(left) : 'checking…';
+  } else {
+    cd.textContent = '--';
+  }
+  if (Date.now() >= nextPollAt) load();
+}, 1000);
+
+load();
+</script>
+</body>
+</html>
